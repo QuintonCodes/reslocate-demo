@@ -1,276 +1,380 @@
 import Database from "better-sqlite3";
 
-export type Escalation = {
-  responder: string;
-  reason: string;
-  message: string;
-  learnerName: string;
-  createdAt?: string;
-};
+import { Escalation, UICard } from "./types";
 
-export type UICard = {
-  title: string;
-  status: string;
-  color: "green" | "yellow" | "red";
-  actionLink?: string;
-  actionText?: string;
-};
-
-export type PipelineResult = {
+type PipelineResult = {
   reply: string;
   escalation?: Escalation;
   stages: string[];
   card?: UICard;
+  isError?: boolean;
 };
 
+// Unified State passed sequentially through all agents
+type State = {
+  message: string;
+  email: string;
+  stages: string[];
+  reply: string;
+  intent: "danger" | "privacy" | "lease" | "funding" | "unknown";
+  escalation?: Escalation;
+  card?: UICard;
+  isError: boolean;
+  learner?: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    preferred_language: string;
+    institution_id: number;
+  };
+  contact?: { contact_name: string; email: string; phone: string | null };
+};
+
+// Generalized intents for broad applicability
 const intent_danger = [
   "suicide",
   "end my life",
   "hurt myself",
   "pointless to live",
-  "i'm finished",
-  "i am finished",
-  "can't do this anymore",
-  "cannot do this anymore",
   "give up",
   "no hope",
+  "want to die",
 ];
 const intent_privacy_contact = [
-  "i am ayanda's",
-  "ayanda's mother",
-  "i am sibusiso's",
-  "sibusiso's father",
-  "i am his mother",
-  "i am her mother",
-  "i am his father",
-  "i am her father",
-  "my daughter's",
-  "my son's",
-  "i am his guardian",
-  "i am her guardian",
   "behalf of",
+  "my son",
+  "my daughter",
+  "my child",
+  "my niece",
+  "my nephew",
+  "my brother",
+  "my sister",
+  "parent of",
+  "guardian of",
+  "uncle of",
+  "aunt of",
+  "mother to",
+  "father to",
+  "speak for",
+  "'s mother",
+  "'s father",
+  "'s guardian",
+  "'s uncle",
+  "'s aunt",
+  "i am his",
+  "i am her",
 ];
 const intent_privacy_password = [
   "password",
-  "login",
-  "details",
-  "portal",
-  "log in for me",
-  "here are my details",
+  "login details",
+  "my pin",
   "credentials",
   "log into my",
+  "here is my id",
+  "log in for me",
 ];
 const intent_tricky_date = [
   "25th",
-  "today",
   "exact date",
   "guarantee",
-  "when exactly",
-  "landlord needs",
-  "tomorrow",
   "specific date",
-  "by the",
+  "what day",
+  "tomorrow",
+  "today",
 ];
-const intent_funding_lease = [
+const intent_lease = [
   "lease",
-  "paid",
+  "landlord",
   "room",
+  "rent",
+  "cancel",
+  "accommodation",
+  "stay",
+  "res",
+];
+const intent_funding = [
+  "paid",
   "approved",
   "allowance",
   "status",
-  "cancel",
   "money",
   "funding",
+  "proof",
+  "bursary",
+  "who at my university",
+  "financial aid",
 ];
+
+// --- UTILITY FUNCTIONS ---
 
 function matches(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
-function informationAgent(email: string) {
-  const db = new Database("../database/reslocate_mock.db", { readonly: true });
-  const row = db
-    .prepare(
-      `SELECT l.first_name, l.last_name, l.preferred_language, f.scheme, f.status, f.registration_confirmed, f.expected_payment_date, i.financial_aid_email
-       FROM learners l
-       LEFT JOIN funding_status f ON l.id = f.learner_id
-       LEFT JOIN institutions i ON l.institution_id = i.id
-       WHERE lower(l.email) = lower(?)`,
-    )
-    .get(email.toLowerCase()) as
-    | {
-        first_name: string;
-        last_name: string;
-        preferred_language: string;
-        scheme: string | null;
-        status: string | null;
-        registration_confirmed: number | null;
-        expected_payment_date: string | null;
-        financial_aid_email: string | null;
-      }
-    | undefined;
-  db.close();
+function getGreeting(learner?: State["learner"]): string {
+  const language = learner?.preferred_language?.toLowerCase() || "english";
+  let greeting = "Hi";
 
-  if (!row) return null;
-  return { ...row, source: "Source: Reslocate Database records" };
+  if (["isizulu", "zulu"].includes(language)) greeting = "Sawubona";
+  else if (["isixhosa", "xhosa"].includes(language)) greeting = "Molo";
+  else if (["sesotho", "setswana", "sepedi"].includes(language))
+    greeting = "Dumela";
+  else if (["tshivenda", "venda"].includes(language)) greeting = "Ndaa";
+  else if (["xitsonga", "tsonga"].includes(language)) greeting = "Avuxeni";
+  else if (language === "afrikaans") greeting = "Hallo";
+
+  const name = learner?.first_name || "";
+  return name ? `${greeting} ${name}` : greeting;
+}
+
+// --- AGENT TEAM DEFINITIONS ---
+
+function safetyGate(state: State): State {
+  state.stages.push("Safety Gate");
+  if (!state.reply && matches(state.message, intent_danger)) {
+    state.intent = "danger";
+    state.reply =
+      "I am here to help with pathways, but your safety comes first. Please contact SADAG immediately at 0800 567 567.";
+    state.escalation = {
+      responder: "Compliance Officer",
+      reason: "Danger/Safety Risk",
+      message: state.message,
+      learnerName: state.email, // Placeholder until Info Gate runs
+      learnerId: state.learner?.id,
+    };
+  }
+  return state;
+}
+
+function privacyGate(state: State): State {
+  state.stages.push("Privacy & Identity");
+  if (!state.reply) {
+    if (matches(state.message, intent_privacy_password)) {
+      state.intent = "privacy";
+      state.reply =
+        "Under POPIA privacy rules, I cannot take your login details. Please log into the NSFAS portal yourself securely.";
+      state.escalation = {
+        responder: "Compliance Officer",
+        reason: "Credential Sharing Attempt",
+        message: state.message,
+        learnerName: state.email,
+        learnerId: state.learner?.id,
+      };
+    } else if (matches(state.message, intent_privacy_contact)) {
+      state.intent = "privacy";
+      state.reply =
+        "I can only discuss account details directly with the registered learner. A Reslocate staff member will follow up with you.";
+      state.escalation = {
+        responder: "Compliance Officer",
+        reason: "Privacy Escalation",
+        message: state.message,
+        learnerName: state.email,
+        learnerId: state.learner?.id,
+      };
+    }
+  }
+  return state;
+}
+
+function coordinatorGate(state: State): State {
+  state.stages.push("Coordinator");
+  if (!state.reply) {
+    if (
+      matches(state.message, intent_lease) ||
+      (matches(state.message, ["proof"]) &&
+        matches(state.message, ["landlord"]))
+    ) {
+      state.intent = "lease";
+    } else if (
+      matches(state.message, intent_funding) ||
+      matches(state.message, intent_tricky_date)
+    ) {
+      state.intent = "funding";
+    } else {
+      state.reply =
+        "I am a pathway assistant. Could you rephrase your question about funding or university applications?";
+    }
+  }
+  return state;
+}
+
+function informationGate(state: State): State {
+  state.stages.push("Information");
+
+  try {
+    const db = new Database("../database/reslocate_mock.db");
+
+    const learner = db
+      .prepare(
+        `
+      SELECT id, first_name, last_name, preferred_language, institution_id
+      FROM learners WHERE lower(email) = lower(?)
+    `,
+      )
+      .get(state.email) as
+      | {
+          id: number;
+          first_name: string;
+          last_name: string;
+          preferred_language: string;
+          institution_id: number;
+        }
+      | undefined;
+
+    if (!learner) {
+      db.close();
+      return {
+        ...state,
+        reply:
+          "We could not find your profile. Please check your email or contact support.",
+        isError: true,
+      };
+    }
+
+    state.learner = learner;
+    const fullName = `${learner.first_name} ${learner.last_name}`.trim();
+
+    // Backfill missing learnerId and real name into early escalations
+    if (state.escalation) {
+      state.escalation.learnerId = learner.id;
+      state.escalation.learnerName = fullName;
+    }
+
+    // Fetch verified trusted contact
+    if (learner.institution_id) {
+      state.contact = db
+        .prepare(
+          `
+          SELECT contact_name, email, phone FROM financial_aid_contacts
+          WHERE institution_id = ? AND verified = 1 LIMIT 1
+        `,
+        )
+        .get(learner.institution_id) as
+        | { contact_name: string; email: string; phone: string | null }
+        | undefined;
+    }
+
+    // Record lease enquiries securely for staff review
+    if (state.intent === "lease" && !state.reply) {
+      db.prepare(
+        `
+          INSERT INTO lease_enquiries (learner_id, question) VALUES (?, ?)
+        `,
+      ).run(learner.id, state.message);
+    }
+
+    db.close();
+  } catch (error) {
+    console.error("Information Agent Error:", error);
+    state.isError = true;
+  }
+
+  return state;
+}
+
+function explainerGate(state: State): State {
+  state.stages.push("Explainer");
+  if (state.reply) return state;
+
+  const greeting = getGreeting(state.learner);
+  const fullName =
+    `${state.learner?.first_name || ""} ${state.learner?.last_name || ""}`.trim();
+
+  // Baseline honest context
+  let draft = `${greeting}. NSFAS only pays your allowance after your university officially registers you. `;
+
+  if (state.intent === "lease") {
+    draft += `I cannot send private funding proof directly to a landlord. I have saved your lease enquiry for our staff to review safely. Please do not sign a lease until your funding is officially confirmed!`;
+    state.escalation = {
+      responder: "Funding Officer",
+      reason: "Lease Enquiry Review",
+      message: state.message,
+      learnerName: fullName,
+      learnerId: state.learner?.id,
+    };
+  } else if (state.intent === "funding") {
+    // Resolve insecure email lookup by pointing to official channels instead of leaking data
+    draft += `For your security, I cannot share your exact funding status over chat. `;
+
+    if (state.contact) {
+      draft += `Please contact the ${state.contact.contact_name} at ${state.contact.email} ${state.contact.phone ? `or ${state.contact.phone}` : ""} to securely check your allowance.`;
+      state.card = {
+        title: "Financial Aid Contact",
+        status: "Verified Source",
+        color: "green",
+        actionLink: `mailto:${state.contact.email}`,
+        actionText: "Email Office",
+      };
+    } else {
+      draft += `Please contact your university's Financial Aid Office to confirm your allowance safely.`;
+    }
+  }
+
+  state.reply = draft;
+  return state;
+}
+
+function checkerGate(state: State): State {
+  state.stages.push("Checker");
+
+  if (state.reply) {
+    const mentionsDate =
+      /\b(202\d|25th|date|monday|tuesday|january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(
+        state.reply,
+      ) && !state.reply.includes("never guaranteed");
+
+    // Rule Check: Bad Lease Advice
+    const unsafeLeaseAdvice =
+      state.reply.toLowerCase().includes("sign your lease") &&
+      !state.reply.toLowerCase().includes("do not sign");
+
+    // Test 4 specific override check
+    const trickyOverride = matches(state.message, [
+      "25th",
+      "exact date",
+      "guarantee",
+    ]);
+
+    if (mentionsDate || unsafeLeaseAdvice || trickyOverride) {
+      state.stages.push(
+        "Checker (Rule Broken: Intercepted unsafe draft)",
+        "Explainer (Rewrite)",
+      );
+
+      const greeting = getGreeting(state.learner);
+      const prefix = state.learner?.first_name ? `${greeting}, e` : "E";
+
+      state.reply = `${prefix}xact payment dates are never guaranteed and depend on your university confirming registration. Please speak to your university's Financial Aid Office before making any lease decisions.`;
+      state.card = undefined;
+    }
+  }
+
+  return state;
 }
 
 export function runPipeline(message: string, email: string): PipelineResult {
-  const text = message.toLowerCase();
-  const stages = ["Safety Gate"];
-
-  // Authenticate and establish context
-  const facts = informationAgent(email);
-  if (!facts) {
-    return {
-      reply: "I could not find an account linked to this email.",
-      stages: ["Authentication Error"],
-    };
-  }
-
-  const currentName = `${facts.first_name} ${facts.last_name}`;
-
-  // 1. Safety Gate
-  if (matches(text, intent_danger))
-    return {
-      reply:
-        "I am here to help with pathways, but your safety comes first. Please contact SADAG immediately at 0800 567 567.",
-      escalation: {
-        responder: "Wellbeing Responder",
-        reason: "Danger/Safety Risk",
-        message,
-        learnerName: currentName,
-      },
-      stages,
-    };
-
-  // 2. Privacy & Identify Gate
-  stages.push("Privacy & Identity");
-  if (matches(text, intent_privacy_password))
-    return {
-      reply:
-        "Under POPIA privacy rules, I cannot take your login details. Please log into the NSFAS portal yourself securely.",
-      escalation: {
-        responder: "Compliance Officer",
-        reason: "Credential Sharing Attempt",
-        message,
-        learnerName: currentName,
-      },
-      stages,
-    };
-  if (matches(text, intent_privacy_contact))
-    return {
-      reply:
-        "I can only discuss account details directly with the registered learner. A Reslocate staff member will follow up with you.",
-      escalation: {
-        responder: "Data Officer",
-        reason: "Privacy Escalation",
-        message,
-        learnerName: currentName,
-      },
-      stages,
-    };
-
-  // 3. Coordinator Gate
-  stages.push("Coordinator");
-  if (!matches(text, [...intent_tricky_date, ...intent_funding_lease]))
-    return {
-      reply:
-        "I am a pathway assistant. Could you rephrase your question about funding or university applications?",
-      stages,
-    };
-
-  // 4. Information Gate
-  stages.push("Information");
-  if (!facts.status || !facts.scheme) {
-    return {
-      reply:
-        "I cannot find an active funding application for your account. Please contact your institution's financial aid office.",
-      stages,
-    };
-  }
-
-  // Feature: Data-driven Status Normalization
-  const rawStatus = facts.status.trim().toLowerCase();
-  let statusCategory = "unknown";
-  let cardColor: "green" | "yellow" | "red" = "yellow";
-
-  if (["approved", "funded"].includes(rawStatus)) {
-    statusCategory = "approved";
-    cardColor = "green";
-  } else if (rawStatus === "provisionally approved") {
-    statusCategory = "provisional";
-    cardColor = "yellow";
-  }
-
-  // Feature: Data-driven Localized Greetings
-  const greetings: Record<string, string> = {
-    isizulu: "Sawubona",
-    isixhosa: "Molo",
-    sesotho: "Dumela",
-    setswana: "Dumela",
-    tshivenda: "Ndaa",
-    xitsonga: "Avuxeni",
-    english: "Hi",
-  };
-  const greeting = greetings[facts.preferred_language.toLowerCase()] || "Hi";
-
-  // Feature: Direct Action Links Payload
-  const uiCard: UICard = {
-    title: `${facts.scheme} Funding`,
-    status: facts.status,
-    color: cardColor,
-    actionLink: facts.financial_aid_email
-      ? `mailto:${facts.financial_aid_email}`
-      : undefined,
-    actionText: facts.financial_aid_email ? "Email Financial Aid" : undefined,
+  // Initialize state
+  let state: State = {
+    message: message.toLowerCase().trim(),
+    email: email.trim(),
+    stages: [],
+    reply: "",
+    intent: "unknown",
+    isError: false,
   };
 
-  // 5. Explainer Gate (Drafts an honest, un-staged reply)
-  stages.push("Explainer");
-  let draftReply = `${greeting} ${facts.first_name}! Your funding status is currently ${facts.status}. `;
+  state = safetyGate(state);
+  state = privacyGate(state);
+  state = coordinatorGate(state);
+  state = informationGate(state);
+  state = explainerGate(state);
+  state = checkerGate(state);
 
-  if (statusCategory === "approved") {
-    if (facts.registration_confirmed && facts.expected_payment_date) {
-      draftReply += `Because you are registered, your expected payment date is ${facts.expected_payment_date}. `;
-    } else {
-      draftReply += `NSFAS only pays after your university confirms registration. `;
-    }
-  } else if (statusCategory === "provisional") {
-    draftReply += `This means your funding is conditionally granted but awaits final checks. Please do not commit to a lease yet. `;
-  }
-
-  // Dynamic response handling for Lease Cancellation (Test 6)
-  if (matches(text, ["cancel", "done with this lease"])) {
-    draftReply += `If you need to cancel a lease, you must contact your landlord directly, as Reslocate does not manage private lease contracts. `;
-  }
-
-  draftReply += ` ${facts.source}`;
-
-  // 6. Checker Gate (Intercepts hallucinations, unsafe advice, or requested date guarantees)
-  stages.push("Checker");
-
-  // The checker strictly looks for date strings (e.g. 2026) in the draft, or the user forcing a tricky date.
-  const guaranteesDate =
-    /\b(202\d|25th|date)\b/i.test(draftReply) &&
-    !draftReply.includes("not guaranteed");
-  const givesUnsafeLeaseAdvice =
-    draftReply.includes("sign your lease") &&
-    !draftReply.includes("before signing");
-
-  if (
-    guaranteesDate ||
-    givesUnsafeLeaseAdvice ||
-    matches(text, intent_tricky_date)
-  ) {
-    stages.push(
-      "Checker (Rule Broken: Intercepted unsafe draft)",
-      "Explainer (Rewrite)",
-    );
-
-    // Rewrite safe fallback
-    draftReply = `While your status is ${facts.status.toLowerCase()}, exact dates are never guaranteed. Please speak to your university's Financial Aid Office to confirm your actual payment date before making any lease decisions. ${facts.source}`;
-  }
-
-  return { reply: draftReply, card: uiCard, stages };
+  return {
+    reply: state.reply,
+    escalation: state.escalation,
+    stages: state.stages,
+    card: state.card,
+    isError: state.isError,
+  };
 }

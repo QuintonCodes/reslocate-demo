@@ -3,6 +3,7 @@
 import {
   ArrowUp,
   GraduationCap,
+  LogOut,
   Mail,
   PlusCircle,
   UserRound,
@@ -10,13 +11,8 @@ import {
 import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-type UICard = {
-  title: string;
-  status: string;
-  color: "green" | "yellow" | "red";
-  actionLink?: string;
-  actionText?: string;
-};
+import LoginModal from "@/components/login-modal";
+import { UICard, User } from "@/lib/types";
 
 type Message = { role: "learner" | "agent"; text: string; card?: UICard };
 
@@ -45,6 +41,7 @@ export default function Home() {
   const [messages, setMessages] = useState(readChatHistory);
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
 
   // User Authentication State
   const [email, setEmail] = useState(() => {
@@ -74,40 +71,37 @@ export default function Home() {
     setMessages(starter);
   }
 
-  async function handleUserSwitch() {
-    const input = window.prompt("Please enter your registered email address:");
-    if (!input || !input.trim()) return;
+  function logout() {
+    localStorage.removeItem("reslocate_user_email");
+    localStorage.removeItem("reslocate_user_name");
+    setEmail("");
+    setUserName("");
+    setShowLogin(true);
+    startNewChat();
+  }
 
-    const testEmail = input.trim();
-    try {
-      const res = await fetch("/api/user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: testEmail }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setEmail(testEmail);
-        setUserName(data.name);
-        localStorage.setItem("reslocate_user_email", testEmail);
-        localStorage.setItem("reslocate_user_name", data.name);
-        startNewChat(); // Clear previous user's chat history
-      } else {
-        alert("Could not find an account registered with that email.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("An error occurred while verifying the email.");
+  function handleAuthSuccess(user: User) {
+    if (user.role !== "learner") {
+      alert("Staff accounts must use the Staff Dashboard to log in.");
+      return;
     }
+
+    const userIdentifier = user.email || email || user.id.toString();
+
+    setEmail(userIdentifier);
+    setUserName(user.name);
+    localStorage.setItem("reslocate_user_email", userIdentifier);
+    localStorage.setItem("reslocate_user_name", user.name);
+    setShowLogin(false);
+    startNewChat();
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!email) {
-      alert("Please log in by clicking the user profile in the header first.");
-      return handleUserSwitch();
+      setShowLogin(true);
+      return;
     }
 
     const message = value.trim();
@@ -121,20 +115,30 @@ export default function Home() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Pass the current message AND the existing chat history
         body: JSON.stringify({ message, email }),
       });
       const result = await response.json();
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
+      if (!response.ok) {
+        console.error(result.error);
+        alert(result.error || "A connection error occurred. Please try again.");
+        setMessages((items) => items.slice(0, -1));
+        return;
+      }
+
       setMessages((items) => [
         ...items,
         {
           role: "agent",
-          text: result.reply || "I was unable to process that message.",
+          text: result.reply,
           card: result.card, // Inject the UI card if it exists
         },
       ]);
+    } catch (e) {
+      console.error(e);
+      alert("Network error. Please try again.");
+      setMessages((items) => items.slice(0, -1));
     } finally {
       setLoading(false);
     }
@@ -142,32 +146,31 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f7f8fa] text-slate-950">
+      <LoginModal
+        isOpen={showLogin}
+        onClose={() => setShowLogin(false)}
+        onSuccess={handleAuthSuccess}
+        defaultTab="learner"
+      />
+
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="grid size-9 place-items-center rounded-xl bg-slate-950 text-white">
               <GraduationCap />
             </div>
             <div>
               <p className="text-sm font-semibold">Reslocate</p>
-              {isMounted && (
-                <button
-                  onClick={handleUserSwitch}
-                  className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                  title="Click to switch user"
-                >
-                  {email
-                    ? `Logged in as ${userName}`
-                    : "Click to identify yourself"}
-                </button>
+              {isMounted && email && (
+                <p className="text-xs text-slate-500">{userName} • Learner</p>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4">
             {isMounted && messages.length > 1 && (
               <button
                 onClick={startNewChat}
-                className="flex items-center gap-1.5 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700"
+                className="flex cursor-pointer items-center gap-1.5 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700"
               >
                 <PlusCircle /> New chat
               </button>
@@ -178,6 +181,21 @@ export default function Home() {
             >
               Staff dashboard
             </Link>
+            {isMounted && email ? (
+              <button
+                onClick={logout}
+                className="flex cursor-pointer items-center gap-2 text-sm text-red-600 hover:text-red-700"
+              >
+                <LogOut /> Sign out
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowLogin(true)}
+                className="text-sm cursor-pointer text-blue-600 hover:text-blue-700"
+              >
+                Sign in
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -264,7 +282,9 @@ export default function Home() {
               <div className="grid size-8 place-items-center rounded-full bg-blue-100 text-blue-700">
                 <GraduationCap />
               </div>
-              <span aria-live="polite">typing...</span>
+              <span className="animate-pulse" aria-live="polite">
+                typing...
+              </span>
             </div>
           )}
         </div>
@@ -282,6 +302,7 @@ export default function Home() {
             disabled={loading}
           />
           <button
+            type="submit"
             aria-label="Send question"
             className="grid size-10 place-items-center rounded-xl bg-slate-950 text-white disabled:opacity-40"
             disabled={loading || !value.trim()}

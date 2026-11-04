@@ -17,7 +17,7 @@ INSERT INTO staff_users (id, full_name, email, password, role, active, started_o
  (1, 'Nandi Khoza',    'nandi.k@reslocate.example',   'Nandi@2026',   'Funding Officer', 1, '2026-02-01', NULL),
  (2, 'Pieter van Wyk', 'pieter.vw@reslocate.example', 'reslocate123', 'Compliance Officer', 1, '2025-06-15', NULL),
  (3, 'Lindiwe Zulu',   'lindiwe.z@reslocate.example', 'Welcome1',     'Funding Officer', 1, '2026-01-10', NULL),
- (4, 'Kabelo Seema',   'kabelo.s@reslocate.example',  'kabelo2025',   'Funding Officer', 1, '2025-03-01', '2026-08-31');
+ (4, 'Kabelo Seema',   'kabelo.s@reslocate.example',  'kabelo2025',   'Funding Officer', 0, '2025-03-01', '2026-08-31');
 
 -- 2. A record of who did what, and when
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -31,8 +31,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 INSERT INTO audit_log (happened_at, staff_id, action, learner_id, details) VALUES
  ('2026-10-21 09:12:00', 1, 'viewed_record', 1, 'Opened record'),
  ('2026-10-21 09:15:00', 1, 'decision',      1, 'Told learner to contact DUT financial aid before signing lease'),
- ('2026-10-24 14:02:00', 4, 'viewed_record', 2, 'Opened record'),
- ('2026-10-27 11:40:00', 2, 'note',          2, 'Called learner on +27 70 000 0102, ID 0708025002083, confirmed NSFAS status by phone');
+ ('2026-10-27 11:40:00', 2, 'note',          2, 'Called learner on +27 70 000 0102, confirmed NSFAS status by phone');
 
 -- 3. Official financial aid contacts at each institution
 CREATE TABLE IF NOT EXISTS financial_aid_contacts (
@@ -47,7 +46,7 @@ CREATE TABLE IF NOT EXISTS financial_aid_contacts (
 INSERT INTO financial_aid_contacts (institution_id, contact_name, email, phone, verified, source) VALUES
  (1, 'DUT Financial Aid Office', 'finaid@dut.example.ac.za',   '+27 31 000 1001', 1, 'Institution website, Oct 2026'),
  (2, 'UKZN Financial Aid Office','finaid@ukzn.example.ac.za',  '+27 31 000 2001', 1, 'Institution website, Oct 2026'),
- (1, 'Mr S. Pillay',             'spillay.dut@gmail.com',      '+27 82 000 3001', 1, 'Shared in a WhatsApp group'),
+ (1, 'Mr S. Pillay',             'spillay.dut@gmail.com',      '+27 82 000 3001', 0, 'Shared in a WhatsApp group'),
  (4, 'Vhembe TVET Bursary Desk', 'bursary@vhembe.example.ac.za', NULL,            1, 'Institution website, Oct 2026');
 
 -- 4. Learners asking about leases and accommodation
