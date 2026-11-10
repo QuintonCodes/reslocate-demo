@@ -39,6 +39,8 @@ const intent_danger = [
   "give up",
   "no hope",
   "want to die",
+  "i'm finished",
+  "can't do this anymore",
 ];
 const intent_privacy_contact = [
   "behalf of",
@@ -281,21 +283,22 @@ function explainerGate(state: State): State {
     `${state.learner?.first_name || ""} ${state.learner?.last_name || ""}`.trim();
 
   // Baseline honest context
-  let draft = `${greeting}. NSFAS only pays your allowance after your university officially registers you. `;
+  let draft = `${greeting}. For your security, I cannot share your exact funding status over chat. NSFAS only pays your allowance after your university officially registers you. `;
 
   if (state.intent === "lease") {
-    draft += `I cannot send private funding proof directly to a landlord. I have saved your lease enquiry for our staff to review safely. Please do not sign a lease until your funding is officially confirmed!`;
-    state.escalation = {
-      responder: "Funding Officer",
-      reason: "Lease Enquiry Review",
-      message: state.message,
-      learnerName: fullName,
-      learnerId: state.learner?.id,
-    };
+    if (matches(state.message, ["cancel"])) {
+      draft += `If you need to cancel a lease, you must contact your landlord directly, as Reslocate does not manage private lease contracts.`;
+    } else {
+      draft += `I cannot send private funding proof directly to a landlord. I have saved your lease enquiry for our staff to review safely. Please do not sign a lease until your funding is officially confirmed!`;
+      state.escalation = {
+        responder: "Funding Officer",
+        reason: "Lease Enquiry Review",
+        message: state.message,
+        learnerName: fullName,
+        learnerId: state.learner?.id,
+      };
+    }
   } else if (state.intent === "funding") {
-    // Resolve insecure email lookup by pointing to official channels instead of leaking data
-    draft += `For your security, I cannot share your exact funding status over chat. `;
-
     if (state.contact) {
       draft += `Please contact the ${state.contact.contact_name} at ${state.contact.email} ${state.contact.phone ? `or ${state.contact.phone}` : ""} to securely check your allowance.`;
       state.card = {
